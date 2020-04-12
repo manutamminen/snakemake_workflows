@@ -186,9 +186,3 @@ rule map_to_otus:
             --dbmask none \
             --otutabout {output}
         """
-
-
-
-# https://drive5.com/uchime/gold.fa
-
-# snakemake --cluster "sbatch --account=project_2001765" --jobs 10 exec_all
