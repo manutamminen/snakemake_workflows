@@ -1,1 +1,1 @@
-# snakemake_workflows
+# Workflows for Snakemake

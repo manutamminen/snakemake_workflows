@@ -1,0 +1,194 @@
+IDs, = glob_wildcards("data/{id}_L001_R1_001.fastq.gz")
+
+rule fastqc:
+    input:
+        read1="data/{id}_L001_R1_001.fastq.gz",
+        read2="data/{id}_L001_R2_001.fastq.gz"
+    output:
+        htmls="fastqc/{id}_L001_R1_001_fastqc.html"
+    shell:
+        """
+        mkdir -p fastqc
+        fastqc --outdir="fastqc" {input.read1} {input.read2}
+        """
+
+rule read_merging:
+    input:
+        read1="data/{id}_L001_R1_001.fastq.gz",
+        read2="data/{id}_L001_R2_001.fastq.gz"
+    output:
+        merged="merged/{id}_merged.fastq"
+    shell:
+        """
+        mkdir -p merged
+        vsearch --fastq_mergepairs {input.read1} \
+            --reverse {input.read2} \
+            --fastq_minovlen 50 \
+            --fastq_maxdiffs 15 \
+            --fastqout {output.merged}
+        """
+
+rule quality_filtering:
+    input:
+        merged="merged/{id}_merged.fastq"
+    output:
+        filtered="filtered/{id}_filtered.fasta"
+    shell:
+        """ 
+        mkdir -p filtered
+        vsearch --fastq_filter {input.merged} \
+            --fastq_maxee 1 \
+            --fastaout {output.filtered} \
+        """
+
+rule dereplicating:
+    input:
+        filtered="filtered/{id}_filtered.fasta"
+    output:
+        dereplicated="dereplicated/{id}_dereplicated.fasta"
+    params:
+        seq_id=lambda wildcards: wildcards.id.split("_")[0]
+    shell:
+        """ 
+        mkdir -p dereplicated
+        vsearch --derep_fulllength {input.filtered} \
+            --strand plus \
+            --output {output.dereplicated} \
+            --sizeout \
+            --relabel {params.seq_id}. \
+            --fasta_width 0
+        """
+    
+rule combine_fastas:
+    input:
+        expand(rules.fastqc.output.htmls, id=IDs),
+        expand(rules.dereplicating.output.dereplicated, id=IDs)
+    output:
+        "combined/all.fasta"
+    shell:
+        """ 
+        mkdir -p combined
+        cat {input} > {output}
+        """
+
+rule dereplicate_combined:
+    input:
+        "combined/all.fasta"
+    output:
+        fasta="combined/all_derep.fasta",
+        uc="combined/all_derep.uc"
+    shell:
+        """
+        vsearch --derep_fulllength {input} \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --uc {output.uc} \
+            --output {output.fasta}
+        """
+        
+rule cluster_combined:
+    input:
+        "combined/all_derep.fasta"
+    output:
+        "combined/centroids.fasta"
+    shell:
+        """
+        vsearch --cluster_size {input} \
+            --id 0.97 \
+            --strand plus \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --centroids {output}
+        """
+        
+rule sort_combined:
+    input:
+        "combined/centroids.fasta"
+    output:
+        "combined/sorted.fasta"
+    shell:
+        """
+        vsearch --sortbysize {input} \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --minsize 2 \
+            --output {output}
+        """
+        
+rule detect_denovo_chimeras:
+    input:
+        "combined/sorted.fasta"
+    output:
+        "combined/denovo_nochimeric.fasta"
+    shell:
+        """
+        vsearch --uchime_denovo {input} \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --qmask none \
+            --nonchimeras {output}
+        """
+        
+rule detect_reference_chimeras:
+    input:
+        "combined/denovo_nochimeric.fasta"
+    output:
+        ref="gold.fa",
+        nc="combined/nochimeric.fasta"
+    shell:
+        """
+        wget https://drive5.com/uchime/{output.ref}
+        vsearch --uchime_ref {input} \
+            --db gold.fa \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --qmask none \
+            --dbmask none \
+            --nonchimeras {output.nc}
+        """
+        
+rule relabel_otus:
+    input:
+        "combined/nochimeric.fasta"
+    output:
+        "combined/otus.fasta"
+    shell:
+        """
+        vsearch --fastx_filter {input} \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --relabel OTU_ \
+            --fastaout {output}
+        """
+
+rule map_to_otus:
+    input:
+        all="combined/all.fasta",
+        otus="combined/otus.fasta"
+    output:
+        "combined/otutab.txt"
+    shell:
+        """
+        vsearch --usearch_global {input.all} \
+            --db {input.otus} \
+            --id 0.97 \
+            --strand plus \
+            --sizein \
+            --sizeout \
+            --fasta_width 0 \
+            --qmask none \
+            --dbmask none \
+            --otutabout {output}
+        """
+
+
+
+# https://drive5.com/uchime/gold.fa
+
+# snakemake --cluster "sbatch --account=project_2001765" --jobs 10 exec_all
