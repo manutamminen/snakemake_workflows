@@ -1,3 +1,4 @@
+
 IDs, = glob_wildcards("data/{id}_L001_R1_001.fastq.gz")
 
 rule fastqc:
@@ -61,14 +62,14 @@ rule dereplicating:
     
 rule combine_fastas:
     input:
-        expand(rules.fastqc.output.htmls, id=IDs),
-        expand(rules.dereplicating.output.dereplicated, id=IDs)
+        qual=expand(rules.fastqc.output.htmls, id=IDs),
+        seqs=expand(rules.dereplicating.output.dereplicated, id=IDs)
     output:
         "combined/all.fasta"
     shell:
         """ 
         mkdir -p combined
-        cat {input} > {output}
+        cat {input.seqs} > {output}
         """
 
 rule dereplicate_combined:
@@ -132,18 +133,25 @@ rule detect_denovo_chimeras:
             --qmask none \
             --nonchimeras {output}
         """
-        
+
+rule download_chimera_reference:
+    output:
+        "gold.fa"
+    shell:
+        """
+        wget https://drive5.com/uchime/{output}
+        """
+
 rule detect_reference_chimeras:
     input:
-        "combined/denovo_nochimeric.fasta"
+        dnc="combined/denovo_nochimeric.fasta",
+        ref="gold.fa"
     output:
-        ref="gold.fa",
         nc="combined/nochimeric.fasta"
     shell:
         """
-        wget https://drive5.com/uchime/{output.ref}
-        vsearch --uchime_ref {input} \
-            --db gold.fa \
+        vsearch --uchime_ref {input.dnc} \
+            --db {input.ref} \
             --sizein \
             --sizeout \
             --fasta_width 0 \
@@ -185,4 +193,26 @@ rule map_to_otus:
             --qmask none \
             --dbmask none \
             --otutabout {output}
+        """
+
+rule download_otu_reference:
+    output:
+        "rdp_16s_v16.fa"
+    shell:
+        """
+        wget http://drive5.com/sintax/{output}.gz
+        gunzip {output}.gz
+        """ 
+
+rule assign_taxonomy:
+    input:
+        ref="rdp_16s_v16.fa",
+        otus="combined/otus.fasta"
+    output:
+        "otu_annotation.txt"
+    shell:
+        """
+        vsearch --sintax {input.otus} \
+            --db {input.ref} \
+            --tabbedout {output}
         """
